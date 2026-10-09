@@ -1,0 +1,418 @@
+const appRoot = document.getElementById("app");
+
+const state = {
+  user: null,
+  summary: null,
+  week: null,
+  token: localStorage.getItem("pds_token") || ""
+};
+
+function showToast(message, kind = "success") {
+  const existing = document.querySelector(".inline-notice");
+  if (existing) existing.remove();
+
+  const el = document.createElement("div");
+  el.className = `inline-notice ${kind}`;
+  el.textContent = message;
+
+  const target = document.querySelector("#loginNotice") || document.querySelector("#formNotice");
+  if (target) {
+    target.innerHTML = "";
+    target.appendChild(el);
+  }
+}
+
+function setAuthHeader() {
+  return state.token ? { Authorization: `Bearer ${state.token}` } : {};
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...setAuthHeader(),
+    ...(options.headers || {})
+  };
+
+  const response = await fetch(url, { ...options, headers });
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload.message || "Erro ao comunicar com o servidor.");
+  }
+
+  return payload;
+}
+
+function formatWeekLabel(week) {
+  if (!week) return "Semana atual";
+  return `Semana ${week}`;
+}
+
+function getCurrentWeek() {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function getStatusClass(status) {
+  const normalized = String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^a-z]/g, "");
+
+  switch (normalized) {
+    case "sem bloqueios":
+      return "status-sembloqueios";
+    case "emdesenvolvimento":
+      return "status-emdesenvolvimento";
+    case "aguardandavalidação":
+      return "status-aguardandavalidacao";
+    case "emrisco":
+      return "status-emrisco";
+    case "concluído":
+    case "concluido":
+      return "status-concluído";
+    default:
+      return "status-emdesenvolvimento";
+  }
+}
+
+function renderLogin() {
+  appRoot.innerHTML = `
+    <div class="login-page">
+      <div class="login-card">
+        <div class="logo-block">
+          <div class="deloitte-logo">Deloitte<span class="deloitte-dot"></span></div>
+        </div>
+
+        <h1 class="login-title">Portal PDS</h1>
+        <p class="login-subtitle">Aceda ao painel de atualizações semanais da equipa.</p>
+
+        <form id="loginForm" class="form-grid">
+          <div class="input-wrap">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" placeholder="admin@deloitte.pt" required />
+          </div>
+
+          <div class="input-wrap">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" placeholder="••••••••" required />
+          </div>
+
+          <button class="primary-btn" type="submit">Entrar</button>
+          <div id="loginNotice"></div>
+        </form>
+      </div>
+    </div>
+  `;
+
+  const form = document.getElementById("loginForm");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+
+    try {
+      const result = await apiFetch("/api/login", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      state.token = result.token;
+      state.user = result.user;
+      localStorage.setItem("pds_token", state.token);
+      renderDashboard();
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+}
+
+function renderDashboard() {
+  if (!state.token) {
+    renderLogin();
+    return;
+  }
+
+  const currentWeek = getCurrentWeek();
+  state.week = currentWeek;
+
+  appRoot.innerHTML = `
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">Deloitte<span class="dot"></span></div>
+        </div>
+
+        <div class="user-box">
+          <div class="user-pill">${state.user ? state.user.name : "Utilizador"}</div>
+          <button class="logout-btn" id="logoutBtn">Sair</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="summary-grid" id="summaryGrid"></div>
+
+        <div class="layout-grid">
+          <section class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Atualização semanal</h2>
+              <div class="week-badge">${formatWeekLabel(state.week)}</div>
+            </div>
+
+            <div id="formNotice"></div>
+
+            <form id="statusForm" class="form-grid-2">
+              <div class="field">
+                <label for="status">Status</label>
+                <select id="status" name="status" required>
+                  <option value="Sem bloqueios">Sem bloqueios</option>
+                  <option value="Em desenvolvimento">Em desenvolvimento</option>
+                  <option value="Aguardando validação">Aguardando validação</option>
+                  <option value="Em risco">Em risco</option>
+                  <option value="Concluído">Concluído</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="summary">Resumo da semana</label>
+                <textarea id="summary" name="summary" placeholder="Descreva o trabalho realizado e o estado geral da semana..." required></textarea>
+              </div>
+
+              <div class="field">
+                <label for="blockers">Bloqueios / acomodações</label>
+                <textarea id="blockers" name="blockers" placeholder="Indique impedimentos, dependências e pontos abertos..."></textarea>
+              </div>
+
+              <div class="field">
+                <label for="risks">Riscos</label>
+                <textarea id="risks" name="risks" placeholder="Apresente riscos e fatores de atenção para a equipa..."></textarea>
+              </div>
+
+              <div class="field">
+                <label for="nextSteps">Próximos passos</label>
+                <textarea id="nextSteps" name="nextSteps" placeholder="Escreva as próximas ações e prioridades..."></textarea>
+              </div>
+
+              <div class="action-row">
+                <button type="button" class="secondary-btn" id="downloadPdfBtn">Exportar PDF</button>
+                <button type="submit" class="primary-btn">Guardar atualização</button>
+              </div>
+            </form>
+
+            <div class="report-preview" id="reportPreview">
+              <div class="preview-title">Pré-visualização do relatório</div>
+              <div class="preview-lines" id="previewOutput"></div>
+            </div>
+          </section>
+
+          <aside class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Resumo da equipa</h2>
+            </div>
+            <div class="status-list" id="teamList"></div>
+          </aside>
+        </div>
+      </main>
+    </div>
+  `;
+
+  const logoutBtn = document.getElementById("logoutBtn");
+  logoutBtn.addEventListener("click", () => {
+    state.token = "";
+    state.user = null;
+    localStorage.removeItem("pds_token");
+    renderLogin();
+  });
+
+  const statusForm = document.getElementById("statusForm");
+  statusForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const payload = {
+      week: state.week,
+      status: document.getElementById("status").value,
+      summary: document.getElementById("summary").value,
+      blockers: document.getElementById("blockers").value,
+      risks: document.getElementById("risks").value,
+      nextSteps: document.getElementById("nextSteps").value
+    };
+
+    try {
+      await apiFetch("/api/reports", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      showToast("Atualização guardada com sucesso.", "success");
+      await loadDashboardData();
+    } catch (error) {
+      showToast(error.message, "error");
+    }
+  });
+
+  document.getElementById("downloadPdfBtn").addEventListener("click", () => {
+    exportPdf();
+  });
+
+  document.querySelectorAll("#statusForm textarea, #statusForm select").forEach((input) => {
+    input.addEventListener("input", updatePreview);
+    input.addEventListener("change", updatePreview);
+  });
+
+  loadDashboardData();
+}
+
+async function loadDashboardData() {
+  try {
+    const me = await apiFetch("/api/me");
+    state.user = me.user;
+
+    const summary = await apiFetch(`/api/summary?week=${state.week}`);
+    state.summary = summary;
+
+    renderSummaryCards(summary);
+    renderTeamList(summary.records);
+    populateFormWithCurrentReport(summary.records, state.user.id);
+    updatePreview();
+  } catch (error) {
+    showToast(error.message, "error");
+    if (error.message.includes("Autenticação") || error.message.includes("Token")) {
+      state.token = "";
+      localStorage.removeItem("pds_token");
+      renderLogin();
+    }
+  }
+}
+
+function renderSummaryCards(summary) {
+  const cards = [
+    { label: "Consultores", value: summary.total },
+    { label: "Atualizados", value: summary.completed },
+    { label: "Sem bloqueios", value: summary.statusCounts["Sem bloqueios"] || 0 },
+    { label: "Em risco", value: summary.statusCounts["Em risco"] || 0 }
+  ];
+
+  const grid = document.getElementById("summaryGrid");
+  grid.innerHTML = cards.map(card => `
+    <div class="metric-card">
+      <div class="metric-label">${card.label}</div>
+      <div class="metric-value">${card.value}</div>
+    </div>
+  `).join("");
+}
+
+function renderTeamList(records) {
+  const teamList = document.getElementById("teamList");
+  teamList.innerHTML = records.map((person) => {
+    const status = person.report?.status || "Sem atualização";
+    const label = person.report ? status : "Sem atualização";
+    const cssClass = person.report ? `pill ${getStatusClass(status)}` : "pill status-emdesenvolvimento";
+
+    return `
+      <div class="status-row">
+        <div class="person">
+          <div class="avatar">${(person.name || "U").charAt(0).toUpperCase()}</div>
+          <span>${person.name}</span>
+        </div>
+        <span class="muted">${person.area}</span>
+        <span class="${cssClass}">${label}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function populateFormWithCurrentReport(records, currentUserId) {
+  const userReport = records.find((item) => item.id === currentUserId)?.report;
+  const form = document.getElementById("statusForm");
+
+  if (!userReport) {
+    form.reset();
+    return;
+  }
+
+  document.getElementById("status").value = userReport.status || "Sem bloqueios";
+  document.getElementById("summary").value = userReport.summary || "";
+  document.getElementById("blockers").value = userReport.blockers || "";
+  document.getElementById("risks").value = userReport.risks || "";
+  document.getElementById("nextSteps").value = userReport.nextSteps || "";
+}
+
+function updatePreview() {
+  const status = document.getElementById("status").value;
+  const summary = document.getElementById("summary").value;
+  const blockers = document.getElementById("blockers").value;
+  const risks = document.getElementById("risks").value;
+  const nextSteps = document.getElementById("nextSteps").value;
+
+  const lines = [
+    `Status: ${status}`,
+    "",
+    `Resumo: ${summary || "-"}`,
+    `Bloqueios: ${blockers || "-"}`,
+    `Riscos: ${risks || "-"}`,
+    `Próximos passos: ${nextSteps || "-"}`
+  ].join("\n");
+
+  document.getElementById("previewOutput").textContent = lines;
+}
+
+function exportPdf() {
+  if (!window.jspdf) {
+    showToast("PDF não disponível no momento.", "error");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const status = document.getElementById("status").value;
+  const summary = document.getElementById("summary").value || "-";
+  const blockers = document.getElementById("blockers").value || "-";
+  const risks = document.getElementById("risks").value || "-";
+  const nextSteps = document.getElementById("nextSteps").value || "-";
+
+  doc.setFontSize(18);
+  doc.text("PDS Semanal - Status de Atividade", 14, 18);
+  doc.setFontSize(12);
+  doc.text(`Utilizador: ${state.user?.name || "-"}`, 14, 30);
+  doc.text(`Semana: ${state.week}`, 14, 38);
+  doc.text(`Status: ${status}`, 14, 46);
+
+  const summaryLines = doc.splitTextToSize(`Resumo:\n${summary}`, 180);
+  doc.text(summaryLines, 14, 58);
+
+  const blocks = doc.splitTextToSize(`Bloqueios:\n${blockers}`, 180);
+  doc.text(blocks, 14, 92);
+
+  const riskLines = doc.splitTextToSize(`Riscos:\n${risks}`, 180);
+  doc.text(riskLines, 14, 126);
+
+  const nextLines = doc.splitTextToSize(`Próximos passos:\n${nextSteps}`, 180);
+  doc.text(nextLines, 14, 160);
+
+  doc.save(`pds-${state.user?.name || "relatorio"}-${state.week}.pdf`);
+}
+
+async function boot() {
+  if (!state.token) {
+    renderLogin();
+    return;
+  }
+
+  try {
+    const response = await apiFetch("/api/me");
+    state.user = response.user;
+    renderDashboard();
+  } catch (error) {
+    localStorage.removeItem("pds_token");
+    renderLogin();
+  }
+}
+
+boot();
